@@ -1,6 +1,7 @@
 """
  https://nipype.readthedocs.io/en/latest/devel/interface_specs.html#traited-attributes
 """
+from warnings import warn
 from nibv.generator.utils import remove_characters
 
 
@@ -71,15 +72,25 @@ def generate_enum_trait(argname, position, values, description="", default=None,
                           usedefault=True)
     """
     if len(values) > 0 and len(values[0]) > 0:
-        values = list(('' if len(v) == 0 else '"{}"'.format(
-            remove_characters(v, "'", '"').strip())) for v in values)
+        if len(values) == 1 and isinstance(values[0], tuple) and values[0][0] == '':
+            # ('', [('Exclude the lesion mask', None), ('e', None), ('Include the lesion mask', None), (' i', None)])
+            values = values[0][1]
+            values = list((values[i][0], values[i+1][0])
+                          for i in range(0, len(values)-1, 2))
+
+        if isinstance(values[0], (list, tuple)):
+            values = list(('' if len(v[1]) == 0 else '"{}"'.format(
+                remove_characters(v[1], "'", '"').strip())) for v in values)
+        else:
+            values = list(('' if len(v) == 0 else '"{}"'.format(
+                remove_characters(v, "'", '"').strip())) for v in values)
         vals = []
         for v in values:
             if len(v) > 0:
                 vals.append(v)
         values_str = (", ".join(vals) + ",\n        ")
     else:
-        print("/!\ empty enum", argname, ":", values)
+        warn("/!\ empty enum {argname}: {values}")
         return ""
 
     description = remove_characters(description, '"', "'")

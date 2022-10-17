@@ -1,79 +1,46 @@
-"""
- https://nipype.readthedocs.io/en/latest/devel/interface_specs.html#traited-attributes
-"""
 import subprocess
 from tqdm import tqdm
+from warnings import warn
 
-"""
-
-Signature('Commissure_coordinates', ReadDiskItem('Commissure coordinates', 'Commissure coordinates'), 'T1mri',
-          ReadDiskItem("T1 MRI", 'aims readable Volume Formats'), 'validation', Choice("Visualise", "Lock", "Unlock"),)
-
-Inout string
-'element1', [nodenameA]('elementA1', [nodenameB]('elementB1', 'elementB2'), 'elementA3'), [
-                        nodename]('elementB1', [nodenameB]('elementB1', 'elementB2'), 'elementA3'),
-Output dict:
-{
-    "element1": []
-    "nodenameA": [
-        "elementA1": None
-        "nodenameB": ['elementB1', 'elementB2'],
-        "elementA3": None
-}
-"""
+from nibv.generator.utils import parse_node, hide_text
 
 
-def find_element_limit(node):
-    i = 0
-    depth = 0
-    while i < len(node):
-        if node[i] == '(':
-            depth += 1
-        elif node[i] == ')':
-            depth -= 1
-            if depth == 0:
-                return i
-        i += 1
-    return -1
+def parse_signature(string):
+    # Remove "signature = Signature(" ... ")"
+    string = string[string.find('(')+1:-1]
+    # Replace text by identifiers
+    hstring, text_elements = hide_text(string)
+    # Remove spaces
+    hstring = hstring.replace(" ", "")
+    # Extract structure
+    items = parse_node(hstring, text_elements)
+
+    traits = {}
+    for i in range(0, len(items), 2):
+        params = {}
+        values = []
+        for val in items[i+1][1]:
+            if isinstance(val, tuple) and val[0] in ['requiredAttributes', 'exactType']:
+                params[val[0]] = val[1]
+            else:
+                values.append(val)
+        traits[items[i]] = {'type': items[i+1][0],
+                            'values': values, 'params': params}
+    return traits
 
 
-def parse_node(node):
-    elements = []
-    while len(node):
-        par = node[1:].find('(')
-        vir = node.find(',')
-        par = par + 1 if par > -1 else 1000000
-        vir = vir if vir > -1 else 1000000
-        if par == 1000000 and vir == 1000000:
-            nodename = node
-            subelements = None
-            node = ''
-        elif vir < par:
-            # Next node is just a string
-            nodename = node[:vir].strip()
-            subelements = None
-            node = node[vir+1:]
-        else:
-            # Next node is a Class
-            nodename = node[0:par].strip()
-            end = find_element_limit(node) + 1
-            subelements = parse_node(node[par:end])
-            node = node[end+2:]
-        nodename = nodename.replace("'", "").replace("(", "").replace(")", "")
-        elements.append((nodename, subelements))
-    return elements
-
-
-def parse_process(fname):
+def parse_signature_of(fname):
+    # Read the process script
     script = subprocess.check_output(
         ['bv', 'cat', fname]).decode('utf-8').split('\n')
 
+    # Read and concatenate the signature lines
     p = 0
     signature = None
     while p < len(script):
         line = script[p]
         if line.startswith("signature = "):
-            signature = line[12:]
+            signature = line
             p += 1
             while len(script[p].strip()):
                 lstr = script[p].strip()
@@ -87,28 +54,39 @@ def parse_process(fname):
         p += 1
 
     if signature is None:
-        print("No signature in", fname)
-        return None
+        warn("No axon signature in {}".format(fname))
+        return None, None
 
-    sign_dict = parse_node(signature)[0][1]
-    inputs = {}
-    for i in range(0, len(sign_dict), 2):
-        inputs[sign_dict[i][0]] = sign_dict[i+1]
-    return inputs
+    # Parse the signature
+    traits = parse_signature(signature)
+
+    if len(traits) < 1:
+        warn("Empty signature in {}".format(fname))
+        return None, None
+
+    return traits, signature
+
+
+def list_toolboxes():
+    description = subprocess.check_output(
+        ['bv', 'axon-runprocess', '--list']).decode('utf-8').split('\n')
+
+    toolboxes = set()
+    for line in description:
+        if line.startswith("    toolbox: "):
+            toolboxes.add(line[13:])
+    return toolboxes
 
 
 def list_process_files(toolbox):
     description = subprocess.check_output(
         ['bv', 'axon-runprocess', '--list']).decode('utf-8').split('\n')
-    print("{} lines".format(len(description)))
 
     current_process = {}
     processes = []
-    for line in tqdm(description):
+    for line in tqdm(description, desc="Parsing the axon processes", unit="lines"):
         if line.startswith("Process ID: "):
             current_process['id'] = line[12:]
-        elif line.startswith("    name: "):
-            current_process['name'] = line[10:]
         elif line.startswith("    name: "):
             current_process['name'] = line[10:]
         elif line.startswith("    toolbox: "):
@@ -116,12 +94,11 @@ def list_process_files(toolbox):
         elif line.startswith("    fileName: "):
             current_process['filename'] = line[14:]
             if current_process['toolbox'] == toolbox:
-                try:
-                    current_process['arguments'] = parse_process(
-                        current_process['filename'])
-                    if current_process:
-                        processes.append(current_process)
-                except IndexError:
-                    pass
+                signature, raw = parse_signature_of(
+                    current_process['filename'])
+                current_process['signature'] = signature
+                current_process['raw'] = raw
+                if current_process:
+                    processes.append(current_process)
             current_process = {}
     return processes

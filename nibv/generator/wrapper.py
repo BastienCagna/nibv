@@ -2,29 +2,35 @@ import os.path as op
 from os import makedirs, listdir
 import importlib
 import inspect
+from warnings import warn
 
 import nibv.generator.traits as gt
 from nibv.generator.utils import remove_characters
 
 
 def generate_inputspec(process, process_node_name):
-    if process['arguments'] is None:
-        print("{} do not have any arguments".format(process['id']))
+    if process['signature'] is None:
+        warn("{} do not have any signature".format(process['id']))
         return None, None
     script = "\nclass {}InputSpec(CommandLineInputSpec):\n".format(
         process_node_name)
     out_files = []
     position = 0
     traits_script = ""
-    for position, (argname, (argtype, params)) in enumerate(process['arguments'].items()):
+    for position, (argname, (argtype, params)) in enumerate(process['signature'].items()):
         if params is not None:
-            params = list(item[0] for item in params)
+            if params[0][1] is None:
+                params = list(item[0] for item in params)
         else:
             params = []
         argname = remove_characters(argname.lower(), '"').strip()
 
         if params:
-            desc = remove_characters(", ".join(params), "'", '"', "[", "]")
+            if isinstance(params[0], (list, tuple)):
+                desc = remove_characters(
+                    ", ".join((p[0] for p in params)), "'", '"', "[", "]")
+            else:
+                desc = remove_characters(", ".join(params), "'", '"', "[", "]")
         else:
             desc = ""
         if argtype == "ReadDiskItem":
@@ -73,7 +79,7 @@ def generate_outputspec(proc_name, out_files):
     return script
 
 
-def generate_nipype_wrap(toolbox, process):
+def create_nipype_wrap(toolbox, process):
     name = "_" + process['id']
     name = name.replace("-", "_")
 
